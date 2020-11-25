@@ -65,8 +65,16 @@ void createSig( void )
 	sa_usr2.sa_flags = 0; // SA_RESTART;
 	sigemptyset(&sa_usr2.sa_mask);
 
-	sigaction(SIGUSR1,&sa_usr1,NULL);
-	sigaction(SIGUSR2,&sa_usr2,NULL);
+	if (sigaction(SIGUSR1,&sa_usr1,NULL) == -1) 
+	{
+		perror("sigaction");
+		exit(1);
+	}
+	if (sigaction(SIGUSR2,&sa_usr2,NULL) == -1) 
+	{
+		perror("sigaction");
+		exit(1);
+	}
 }
 
 int main(void)

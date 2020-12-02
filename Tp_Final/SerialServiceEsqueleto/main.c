@@ -11,9 +11,15 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 
+char buffer_receive_tcp[10];
+_Bool flag_data = 0;
 
-void* serial_thread_handler (void* fd)
+/* Funcion para inicializar socket de servidor TCP */
+int initSocketTCP( void );
+
+void* serial_thread (void* fd)
 {
+	int bytes_received;
 	char buffer[10];
 
 	printf("Inicio Serial Service\r\n");
@@ -22,71 +28,49 @@ void* serial_thread_handler (void* fd)
 
 	while(1)
 	{
-		serial_receive(buffer, sizeof(buffer));
+		bytes_received = serial_receive(buffer, sizeof(buffer));
+		if (bytes_received != 0)
+		{
+			// Enviamos mensaje a cliente
+    		if (write (*(int *)fd, buffer, strlen(buffer)) == -1)
+    		{
+      			perror("Error escribiendo mensaje en socket");
+      			exit (1);
+        	}
+		}
 
-		printf("%s\r\n",buffer);
-		serial_send(">OUT:1,0\r\n",sizeof(">OUT:X,Y\r\n"));
-		sleep(1);
-		serial_send(">OUT:1,1\r\n",sizeof(">OUT:X,Y\r\n"));
-		sleep(1);
+		if(flag_data)
+		{
+			printf("%s\r\n",buffer_receive_tcp);
+			serial_send(buffer_receive_tcp,sizeof(buffer_receive_tcp));
+			flag_data = 0;
+		}
 
-
-		// Enviamos mensaje a cliente
-    	if (write (*(int *)fd, buffer, strlen(buffer)) == -1)
-    	{
-      		perror("Error escribiendo mensaje en socket");
-      		exit (1);
-        }
+		
 		//Necesita un delay porque sino satura el programa de python
-	    sleep(2);
+	    usleep(200000);
 	}
 }
-
-
 
 int main (void)
 {
 	socklen_t addr_len;
 	struct sockaddr_in clientaddr;
-	struct sockaddr_in serveraddr;
-	char buffer[128];
+
 	int newfd;
 	int n;
 	_Bool flag_conn_lost = 1;
 
 	int ret;
-	pthread_t serial_thread;
+	pthread_t serial_thread_handler;
 
-	// Creamos socket
-	int s = socket(AF_INET,SOCK_STREAM, 0);
+	// Inicializo servidor TCP
+	int s = initSocketTCP();
 
-	// Cargamos datos de IP:PORT del server
-    bzero((char*) &serveraddr, sizeof(serveraddr));
-    serveraddr.sin_family = AF_INET;
-    serveraddr.sin_port = htons(10000);
-    if(inet_pton(AF_INET, "127.0.0.1", &(serveraddr.sin_addr))<=0)
-    {
-     	fprintf(stderr,"ERROR invalid server IP\r\n");
-        return 0;
-    }
-
-	// Abrimos puerto con bind()
-	if (bind(s, (struct sockaddr*)&serveraddr, sizeof(serveraddr)) == -1) {
-		close(s);
-		perror("listener: bind");
-		return 0;
-	}
-
-	// Seteamos socket en modo Listening
-	if (listen (s, 10) == -1) // backlog=10
-  	{
-    	perror("error en listen");
-    	exit(1);
-  	}
-	  
 	while(1)
 	{
 		char ipClient[32];
+
 		// Ejecutamos accept() para recibir conexiones entrantes
 		addr_len = sizeof(struct sockaddr_in);
     	if ( (newfd = accept(s, (struct sockaddr *)&clientaddr, &addr_len)) == -1)
@@ -95,7 +79,9 @@ int main (void)
 		    exit(1);
 	    }
 
-		ret = pthread_create (&serial_thread, NULL, serial_thread_handler, (void*) &newfd);
+		// Creo Thread para manejar comunicacion con puerto serie
+		ret = pthread_create (&serial_thread_handler, NULL, serial_thread, (void*) &newfd); //Le paso como parametro el buffer de recepcion de TCP client
+		
 		if(ret)
 		{
 			errno = ret;
@@ -109,39 +95,63 @@ int main (void)
 
 		while( flag_conn_lost )
 		{
-            // Funcion de lectura bloqueante
-            n = read(newfd,buffer,128);
-
-            switch ( n )
-            {
-            case -1:
-                perror("Error leyendo mensaje en socket");
-				exit(1);
-                break;
-
-            case 0:
-                flag_conn_lost = 0;
-                break;
-
-            default:
-            	buffer[n]=0x00;
-			    printf("Recibi %d bytes.:%s\n",n,buffer);
-
-			    // Enviamos mensaje a cliente
-    		   /* if (write (newfd, ">SW:1,1\r\n", strlen(">SW:1,1\r\n")) == -1)
-    		    {
-      			    perror("Error escribiendo mensaje en socket");
-      			    exit (1);
-    		    }
-                // Necesita un delay porque sino satura el programa de python
-			    sleep(2);*/
-                break;
-            }
+			// Funcion de lectura bloqueante
+        	n = read(newfd,buffer_receive_tcp,128);
+        	switch ( n )
+			{
+        		case -1:
+                	perror("Error leyendo mensaje en socket");
+					exit(1);
+                	break;
+            	case 0:
+                	flag_conn_lost = 0;
+                	break;
+            	default:
+            		//buffer[n]=0x00;
+					flag_data = 1;
+			    	printf("Recibi %d bytes.:%s\n",n,buffer_receive_tcp);
+                	break;
+        	}
 		}
 
-        pthread_cancel(serial_thread);
-	    pthread_join (serial_thread, NULL);
+        pthread_cancel(serial_thread_handler);
+	    pthread_join (serial_thread_handler, NULL);
 
 		close(newfd);
 	}
+}
+
+
+int initSocketTCP( void )
+{
+	struct sockaddr_in serveraddr;
+
+	// Creamos socket
+	int s = socket(AF_INET,SOCK_STREAM, 0);
+
+	// Cargamos datos de IP:PORT del server
+	bzero((char*) &serveraddr, sizeof(serveraddr));
+	serveraddr.sin_family = AF_INET;
+	serveraddr.sin_port = htons(10000);
+	if(inet_pton(AF_INET, "127.0.0.1", &(serveraddr.sin_addr))<=0)
+	{
+		fprintf(stderr,"ERROR invalid server IP\r\n");
+		return 0;
+	}
+
+	// Abrimos puerto con bind()
+	if (bind(s, (struct sockaddr*)&serveraddr, sizeof(serveraddr)) == -1) 
+	{
+		close(s);
+		perror("listener: bind");
+		return 0;
+	}
+
+	// Seteamos socket en modo Listening
+	if (listen (s, 10) == -1) // backlog=10
+	{
+		perror("error en listen");
+		exit(1);
+	}
+	return s;
 }

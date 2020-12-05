@@ -12,10 +12,9 @@
 #include <netdb.h>
 #include <signal.h>
 
-char buffer_receive_tcp[10];
-_Bool flag_data = 0;
 _Bool flag_socket = 0;
 volatile sig_atomic_t got_sig;
+pthread_mutex_t mutexData = PTHREAD_MUTEX_INITIALIZER;
 
 int initSocketTCP( void );
 
@@ -37,6 +36,7 @@ int main (void)
 	int n;
 	int ret;
 	pthread_t serial_thread_handler;
+	char buffer_receive_tcp[10];
 
 	// Inicializo servidor TCP
 	int s = initSocketTCP();
@@ -50,7 +50,7 @@ int main (void)
 
 		// Ejecutamos accept() para recibir conexiones entrantes
 		addr_len = sizeof(struct sockaddr_in);
-    	if ( (newfd = accept(s, (struct sockaddr *)&clientaddr, &addr_len)) == -1)
+    	if ( (newfd = accept(s, (struct sockaddr *)&clientaddr, &addr_len)) == -1 || got_sig == 1)
       	{
 			perror("error en accept");
 		    exit(1);
@@ -71,9 +71,11 @@ int main (void)
 		inet_ntop(AF_INET, &(clientaddr.sin_addr), ipClient, sizeof(ipClient));
 		printf  ("server:  conexion desde:  %s\n",ipClient);
 
+		pthread_mutex_lock (&mutexData);
 		flag_socket = 1;	// Indico que la conexión con el socket esta activa
+		pthread_mutex_unlock (&mutexData);
 		
-		while( flag_socket == 1 )
+		while( flag_socket == 1 && got_sig == 0 )
 		{
 			// Funcion de lectura bloqueante
         	n = read(newfd,buffer_receive_tcp,128);
@@ -84,24 +86,30 @@ int main (void)
 					exit(1);
                 	break;
             	case 0:
+					pthread_mutex_lock (&mutexData);
                 	flag_socket = 0;	// Indico que el socket se desconecto.
-                	break;
+				    pthread_mutex_unlock (&mutexData);
+	            	break;
             	default:
-					flag_data = 1;
+					serial_send(buffer_receive_tcp,sizeof(buffer_receive_tcp));
                 	break;
         	}
-			if (got_sig)
-			{
-				pthread_cancel(serial_thread_handler);
-	    		pthread_join (serial_thread_handler, NULL);
-				close(newfd);
-			}
+		}
+		if( got_sig == 1)
+		{
+			serial_close(1, 115200);
+			close(s);
+			pthread_cancel(serial_thread_handler);
+	    	pthread_join (serial_thread_handler, NULL);
+			close(newfd);
+			break;
 		}
 
         pthread_cancel(serial_thread_handler);
 	    pthread_join (serial_thread_handler, NULL);
 		close(newfd);
 	}
+	printf("Sali\n\r");
 }
 
 /* Thread */
@@ -119,8 +127,10 @@ void* serial_thread (void* fd)
 		bytes_received = serial_receive(buffer, sizeof(buffer));
 		if (bytes_received != 0)
 		{
+			pthread_mutex_lock (&mutexData);
 			if (flag_socket == 1)
 			{
+				pthread_mutex_unlock (&mutexData);
 				// Enviamos mensaje a cliente
     			if (write (*(int *)fd, buffer, strlen(buffer)) == -1)
     			{
@@ -128,15 +138,11 @@ void* serial_thread (void* fd)
       				exit (1);
         		}
 			}
-		}
-
-		if(flag_data)
-		{
-			//printf("%s\r\n",buffer_receive_tcp);
-			serial_send(buffer_receive_tcp,sizeof(buffer_receive_tcp));
-			flag_data = 0;
-		}
-		
+			else
+			{
+				pthread_mutex_unlock (&mutexData);
+			}
+		}		
 		//Necesita un delay porque sino satura el programa de python
 	    usleep(200000);
 	}

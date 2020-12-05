@@ -13,14 +13,14 @@
 #include <signal.h>
 
 _Bool flag_socket = 0;
-volatile sig_atomic_t got_sig;
+volatile sig_atomic_t got_sig = 0;
 pthread_mutex_t mutexData = PTHREAD_MUTEX_INITIALIZER;
 
 int initSocketTCP( void );
 
 void sig_handler(int sig);
 
-void createSig( void );
+void createSign( void );
 
 void bloquearSign(void);
 
@@ -53,7 +53,7 @@ int main (void)
     	if ( (newfd = accept(s, (struct sockaddr *)&clientaddr, &addr_len)) == -1 || got_sig == 1)
       	{
 			perror("error en accept");
-		    exit(1);
+			break;
 	    }
 
 		bloquearSign();	// Bloqueo SIGN
@@ -83,8 +83,6 @@ int main (void)
 			{
         		case -1:
                 	perror("Error leyendo mensaje en socket");
-					exit(1);
-                	break;
             	case 0:
 					pthread_mutex_lock (&mutexData);
                 	flag_socket = 0;	// Indico que el socket se desconecto.
@@ -92,24 +90,25 @@ int main (void)
 	            	break;
             	default:
 					serial_send(buffer_receive_tcp,sizeof(buffer_receive_tcp));
-                	break;
         	}
 		}
-		if( got_sig == 1)
+		if (got_sig == 1)
 		{
-			serial_close(1, 115200);
-			close(s);
-			pthread_cancel(serial_thread_handler);
-	    	pthread_join (serial_thread_handler, NULL);
-			close(newfd);
 			break;
 		}
-
         pthread_cancel(serial_thread_handler);
 	    pthread_join (serial_thread_handler, NULL);
 		close(newfd);
 	}
-	printf("Sali\n\r");
+
+	if( got_sig == 1)
+	{
+		serial_close();
+		pthread_cancel(serial_thread_handler);
+		close(newfd);
+		close(s);
+		exit(1);
+	}
 }
 
 /* Thread */
@@ -127,20 +126,14 @@ void* serial_thread (void* fd)
 		bytes_received = serial_receive(buffer, sizeof(buffer));
 		if (bytes_received != 0)
 		{
-			pthread_mutex_lock (&mutexData);
 			if (flag_socket == 1)
 			{
-				pthread_mutex_unlock (&mutexData);
 				// Enviamos mensaje a cliente
     			if (write (*(int *)fd, buffer, strlen(buffer)) == -1)
     			{
       				perror("Error escribiendo mensaje en socket");
       				exit (1);
         		}
-			}
-			else
-			{
-				pthread_mutex_unlock (&mutexData);
 			}
 		}		
 		//Necesita un delay porque sino satura el programa de python

@@ -126,6 +126,7 @@ void* serial_thread (void* fd)
 		bytes_received = serial_receive(buffer, sizeof(buffer));
 		if (bytes_received != 0)
 		{
+			pthread_mutex_lock (&mutexData);
 			if (flag_socket == 1)
 			{
 				// Enviamos mensaje a cliente
@@ -134,6 +135,7 @@ void* serial_thread (void* fd)
       				perror("Error escribiendo mensaje en socket");
       				exit (1);
         		}
+			pthread_mutex_unlock (&mutexData);
 			}
 		}		
 		//Necesita un delay porque sino satura el programa de python
